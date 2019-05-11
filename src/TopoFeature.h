@@ -31,8 +31,10 @@
 
 #include "definitions.h"
 #include "geomtools.h"
+#include "io.h"
+#include "polyfit.hpp"
 #include "nlohmann-json/json.hpp"
-#include <random>
+#include "ptinpoly.h"
 
 class TopoFeature {
 public:
@@ -41,18 +43,19 @@ public:
 
   virtual bool          lift() = 0;
   virtual bool          buildCDT();
-  virtual bool          add_elevation_point(Point2 &p, double z, float radius, int lasclass) = 0;
+  virtual bool          add_elevation_point(Point2& p, double z, float radius, int lasclass, bool within) = 0;
   virtual int           get_number_vertices() = 0;
   virtual TopoClass     get_class() = 0;
   virtual bool          is_hard() = 0;
   virtual std::string   get_mtl() = 0;
   virtual void          get_citygml(std::wostream& of) = 0;
-  virtual void          get_cityjson(nlohmann::json& j, std::unordered_map<std::string, unsigned long> &dPts) = 0;
+  virtual void          get_cityjson(nlohmann::json& j, std::unordered_map<std::string, unsigned long>& dPts) = 0;
   virtual void          get_citygml_imgeo(std::wostream& of) = 0;
-  virtual bool          get_shape(OGRLayer*, bool writeAttributes, AttributeMap extraAttributes = AttributeMap()) = 0;
+  virtual bool          get_shape(OGRLayer*, bool writeAttributes, const AttributeMap& extraAttributes = AttributeMap()) = 0;
+  virtual void          cleanup_elevations() = 0;
 
   std::string  get_id();
-  void         construct_vertical_walls(const NodeColumn& nc, int baseheight);
+  void         construct_vertical_walls(const NodeColumn& nc);
   void         fix_bowtie();
   void         add_adjacent_feature(TopoFeature* adjFeature);
   std::vector<TopoFeature*>* get_adjacent_features();
@@ -61,22 +64,23 @@ public:
   std::string  get_layername();
   Point2       get_point2(int ringi, int pi);
   bool         has_point2(const Point2& p, std::vector<int>& ringis, std::vector<int>& pis);
-  bool         has_segment(Point2& a, Point2& b, int& aringi, int& api, int& bringi, int& bpi);
-  bool         adjacent(const Polygon2& poly);
-  float        get_distance_to_boundaries(Point2& p);
+  bool         has_segment(const Point2& a, const Point2& b, int& aringi, int& api, int& bringi, int& bpi);
+  bool         adjacent(Polygon2& poly);
+  float        get_distance_to_boundaries(const Point2& p);
   int          get_vertex_elevation(int ringi, int pi);
-  int          get_vertex_elevation(Point2& p);
+  int          get_vertex_elevation(const Point2& p);
   void         set_vertex_elevation(int ringi, int pi, int z);
   void         set_top_level(bool toplevel);
   bool         has_vertical_walls();
   void         add_vertical_wall();
   bool         get_top_level();
-  bool         get_multipolygon_features(OGRLayer* layer, std::string className, bool writeAttributes, AttributeMap extraAttributes = AttributeMap(), bool writeHeights = false, int height_base = 0, int height = 0);
-  void         get_obj(std::unordered_map< std::string, unsigned long > &dPts, std::string mtl, std::string &fs);
-  AttributeMap get_attributes();
+  bool         get_multipolygon_features(OGRLayer* layer, std::string className, bool writeAttributes, const AttributeMap& extraAttributes = AttributeMap());
+  bool         writeAttribute(OGRFeature* feature, OGRFeatureDefn* featureDefn, std::string name, std::string value);
+  void         get_obj(std::unordered_map< std::string, unsigned long >& dPts, std::string mtl, std::string& fs);
+  AttributeMap& get_attributes();
   void         get_imgeo_object_info(std::wostream& of, std::string id);
-  void         get_citygml_attributes(std::wostream& of, AttributeMap attributes);
-  void         get_cityjson_attributes(nlohmann::json& f, AttributeMap attributes);
+  void         get_citygml_attributes(std::wostream& of, const AttributeMap& attributes);
+  void         get_cityjson_attributes(nlohmann::json& f, const AttributeMap& attributes);
 protected:
   Polygon2*                         _p2;
   std::vector< std::vector<int> >   _p2z;
@@ -94,14 +98,15 @@ protected:
   std::vector<Triangle>                           _triangles_vw;
 
   Point2  get_next_point2_in_ring(int ringi, int i, int& pi);
-  bool    assign_elevation_to_vertex(Point2 &p, double z, float radius);
-  bool    within_range(Point2 &p, Polygon2 &oly, double radius);
-  bool    point_in_polygon(const Point2 &p, const Polygon2 &poly);
+  bool    assign_elevation_to_vertex(const Point2& p, double z, float radius);
+  bool    within_range(const Point2& p, double radius);
+  bool    point_in_polygon(const Point2& p);
   void    lift_each_boundary_vertices(float percentile);
   void    lift_all_boundary_vertices_same_height(int height);
 
-  void get_cityjson_geom(nlohmann::json& g, std::unordered_map<std::string, unsigned long> &dPts, std::string primitive = "MultiSurface");
+  void get_cityjson_geom(nlohmann::json& g, std::unordered_map<std::string, unsigned long>& dPts, std::string primitive = "MultiSurface");
   void get_triangle_as_gml_surfacemember(std::wostream& of, Triangle& t, bool verticalwall = false);
+  void get_floor_triangle_as_gml_surfacemember(std::wostream& of, Triangle& t, int baseheight);
   void get_triangle_as_gml_triangle(std::wostream& of, Triangle& t, bool verticalwall = false);
   bool get_attribute(std::string attributeName, std::string &attribute, std::string defaultValue = "");
 };
@@ -110,17 +115,19 @@ protected:
 
 class Flat: public TopoFeature {
 public:
-  Flat(char *wkt, std::string layername, AttributeMap attributes, std::string pid);
+  Flat(char* wkt, std::string layername, AttributeMap attributes, std::string pid);
   int                 get_number_vertices();
-  bool                add_elevation_point(Point2 &p, double z, float radius, int lasclass);
+  bool                add_elevation_point(Point2& p, double z, float radius, int lasclass, bool within);
   int                 get_height();
   virtual TopoClass   get_class() = 0;
   virtual bool        is_hard() = 0;
   virtual bool        lift() = 0;
   virtual void        get_citygml(std::wostream& of) = 0;
-  virtual void        get_cityjson(nlohmann::json& j, std::unordered_map<std::string, unsigned long> &dPts) = 0;
+  virtual void        get_cityjson(nlohmann::json& j, std::unordered_map<std::string, unsigned long>& dPts) = 0;
+  virtual void        cleanup_elevations() = 0;
 protected:
   std::vector<int>    _zvaluesinside;
+  int                  _height_top;
   bool                lift_percentile(float percentile);
 };
 
@@ -128,32 +135,34 @@ protected:
 
 class Boundary3D: public TopoFeature {
 public:
-  Boundary3D(char *wkt, std::string layername, AttributeMap attributes, std::string pid);
+  Boundary3D(char* wkt, std::string layername, AttributeMap attributes, std::string pid);
   int                  get_number_vertices();
-  bool                 add_elevation_point(Point2 &p, double z, float radius, int lasclass);
+  bool                 add_elevation_point(Point2& p, double z, float radius, int lasclass, bool within);
   virtual TopoClass    get_class() = 0;
   virtual bool         is_hard() = 0;
   virtual bool         lift() = 0;
   virtual void         get_citygml(std::wostream& of) = 0;
-  virtual void         get_cityjson(nlohmann::json& j, std::unordered_map<std::string, unsigned long> &dPts) = 0;
+  virtual void         get_cityjson(nlohmann::json& j, std::unordered_map<std::string, unsigned long>& dPts) = 0;
+  virtual void         cleanup_elevations() = 0;
+  void                 detect_outliers(bool replace_all);
 protected:
   int                  _simplification;
   void                 smooth_boundary(int passes = 1);
-  void                 detect_outliers(int degrees_incline);
 };
 
 //---------------------------------------------
 
 class TIN: public TopoFeature {
 public:
-  TIN(char *wkt, std::string layername, AttributeMap attributes, std::string pid, int simplification = 0, double simplification_tinsimp = 0, float innerbuffer = 0);
+  TIN(char* wkt, std::string layername, AttributeMap attributes, std::string pid, int simplification = 0, double simplification_tinsimp = 0, float innerbuffer = 0);
   int                 get_number_vertices();
-  bool                add_elevation_point(Point2 &p, double z, float radius, int lasclass);
+  bool                add_elevation_point(Point2& p, double z, float radius, int lasclass, bool within);
   virtual TopoClass   get_class() = 0;
   virtual bool        is_hard() = 0;
   virtual bool        lift() = 0;
   virtual void        get_citygml(std::wostream& of) = 0;
-  virtual void        get_cityjson(nlohmann::json& j, std::unordered_map<std::string, unsigned long> &dPts) = 0;
+  virtual void        get_cityjson(nlohmann::json& j, std::unordered_map<std::string, unsigned long>& dPts) = 0;
+  virtual void        cleanup_elevations() = 0;
   bool                buildCDT();
 protected:
   int                 _simplification;
