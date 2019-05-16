@@ -43,7 +43,8 @@ FIND_PATH(LIBLAS_INCLUDE_DIR
   /usr/include
   /usr/local/include
   /tmp/lasjunk/include
-  ${LIBLAS_ROOT_DIR}/include)
+  ${LIBLAS_ROOT_DIR}/include
+  ${LIBLAS_ROOT_DIR}/include/liblas)
 
 find_library(LIBLAS_LIBRARY
   NAMES liblas.dylib liblas
