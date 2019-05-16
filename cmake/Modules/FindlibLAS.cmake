@@ -37,14 +37,13 @@ ENDIF()
 
 
 FIND_PATH(LIBLAS_INCLUDE_DIR
-  liblas.hpp
+  liblas/liblas.hpp
   PATH_PREFIXES liblas
   PATHS
   /usr/include
   /usr/local/include
   /tmp/lasjunk/include
-  ${LIBLAS_ROOT_DIR}/include
-  ${LIBLAS_ROOT_DIR}/include/liblas)
+  ${LIBLAS_ROOT_DIR}/include)
 
 find_library(LIBLAS_LIBRARY
   NAMES liblas.dylib liblas
